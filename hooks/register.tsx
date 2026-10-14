@@ -1,9 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderElement } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, TextProps } from 'claude-code'
 
 import type { Starts } from '../types'
 import { findLineRefs, lastNumber, numberReply, rowsAtMost, splitUnits, textKey } from './lines'
 import type { Unit } from './lines'
+import { layoutTable } from './table'
+import type { Span } from './table'
 
 type ApiBlock = { type: string; text?: unknown }
 type ApiMessage = { role: 'user' | 'assistant'; content: readonly ApiBlock[] }
@@ -154,7 +156,10 @@ export const register: Register = on => {
     // lies under the drawn gutter as that mask, clipped to the row. Its
     // gutter, " " + digits + " ", numbers from 10^(width-2), so it is
     // width+1 cells; a clip leaves its last cell out of the mask, so the
-    // clip is width+1 wide and the mask exactly `width`.
+    // clip is width+1 wide and the mask exactly `width`. The mask's numbers
+    // show wherever nothing is drawn over them, so the rule under the label
+    // runs as far as the mask does, and `rows` must be at least the row's
+    // height: a row taller than its mask shows those numbers as it scrolls.
     const row = (n: number | undefined, rows: number, content: RenderElement | null) => {
       const bullet = isBulletDue ? glyph : ' '
       isBulletDue = false
@@ -170,7 +175,7 @@ export const register: Register = on => {
             </Text>
             {rows > 1 ? (
               <Box position="absolute" top={1} bottom={0} left={0} width={width} overflow="hidden">
-                <Text dimColor>{Array(rows - 1).fill(`${' '.repeat(width - 2)}│ `).join('\n')}</Text>
+                <Text dimColor>{Array(rows).fill(`${' '.repeat(width - 2)}│ `).join('\n')}</Text>
               </Box>
             ) : null}
           </Box>
@@ -179,6 +184,19 @@ export const register: Register = on => {
           </Box>
         </Box>
       )
+    }
+
+    // A run of a table cell, styled as the engine styles inline markdown.
+    const spanOf = ({ text, bold, italic, strike, underline, dim, code }: Span): RenderElement | string => {
+      if (!bold && !italic && !strike && !underline && !dim && !code) return text
+      const style: TextProps = {}
+      if (bold) style.weight = 'bold'
+      if (italic) style.italic = true
+      if (strike) style.strikethrough = true
+      if (underline) style.underline = true
+      if (dim) style.dimColor = true
+      if (code) style.color = 'permission'
+      return <Text {...style}>{text}</Text>
     }
 
     const room = columns - width
@@ -195,8 +213,29 @@ export const register: Register = on => {
             ),
           )
         case 'table': {
-          const tableRows = u.text.split('\n').reduce((sum, line) => sum + rowsAtMost(line, room) + 1, 2)
-          return [row(offset + u.n, tableRows, <Markdown text={u.text} />)]
+          // The engine sizes a table to the whole terminal, past the room
+          // beside the gutter, so the table is drawn here to fit that room:
+          // one row per line, which makes the row exactly that tall. Like
+          // the engine's (4 cells under the terminal's width, from a body 2
+          // cells in), it ends 2 cells short of the edge, so a glyph the
+          // terminal draws wider than counted cannot push a rule onto the
+          // next row.
+          const lines = layoutTable(u.text, room - 2)
+          if (lines === undefined) {
+            const textRows = u.text.split('\n').reduce((sum, line) => sum + rowsAtMost(line, room) + 1, 2)
+            return [row(offset + u.n, textRows, <Markdown text={u.text} />)]
+          }
+          return [
+            row(
+              offset + u.n,
+              lines.length,
+              <Box flexDirection="column">
+                {lines.map(line => (
+                  <Text wrap="truncate-end">{line.length === 0 ? ' ' : line.map(spanOf)}</Text>
+                ))}
+              </Box>,
+            ),
+          ]
         }
         case 'text':
           return [

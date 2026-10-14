@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { displayWidth } from '../hooks/lines'
+
 const TEXT = '첫 줄\n\n```js\nlet x = 1\n```\n셋째 줄'
 const message = (isFullscreen: boolean, isFirstOfReply = true, text = TEXT) =>
   ({
@@ -24,6 +26,29 @@ test('fullscreen: a bullet, numbers and a rule in the gutter, a mask under each 
   expect(codes.find(c => c.props.source === 'let x = 1')?.props.language).toBe('js')
   const texts = (await ui.findAll({ type: 'Markdown' })).map(m => m.props.text)
   expect(texts).toEqual(['첫 줄', '셋째 줄'])
+  await ui.unmount()
+})
+
+test('a wide table is drawn within the room beside the gutter, its mask as tall as it', async $ => {
+  const table = [
+    '| 질문 | 답 |',
+    '|---|---|',
+    '| 설정했나 | ✅ `core.quotePath=false` (전역, 백업해둠) |',
+    '| 원래 상태 | "꺼짐"이 아니라 **켜짐** (`true`가 기본값) |',
+    '| 왜 기본이 `true`인가 | git 공식 문서: 0x80 이상 바이트는 따옴표로 감싸고 8진수로 이스케이프해요. 설명은 영어 기준으로 만들어진 시절의 안전장치로 추정한 것이에요 |',
+  ].join('\n')
+  const ui = await $.ui.mount(message(true, true, `정리\n\n${table}\n끝`))
+  await ui.drawn()
+  // "● 3 │ " leaves 120 - 6 cells, and the table stops 2 short of the edge
+  const lines = (await ui.findAll({ type: 'Text' })).map(t => t.text).filter(t => /^[┌├│└]/.test(t))
+  expect(lines.length).toBeGreaterThan(5)
+  for (const line of lines) expect(displayWidth(line)).toBeLessThanOrEqual(112)
+  expect(new Set(lines.map(displayWidth)).size).toBe(1)
+  // the table's row: a mask of one line more than the table, the rule as long
+  const masks = (await ui.findAll({ type: 'Code' })).filter(c => c.props.startLine === 10000)
+  expect(masks.map(c => String(c.props.source).split('\n').length)).toContain(lines.length + 1)
+  const rules = (await ui.findAll({ type: 'Text' })).filter(t => /^ +│ \n/.test(t.text))
+  expect(rules.map(t => t.text.split('\n').length)).toContain(lines.length)
   await ui.unmount()
 })
 

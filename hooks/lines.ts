@@ -122,12 +122,57 @@ export function numberReply(blocks: readonly string[]): { starts: number[]; line
   return { starts, lines }
 }
 
-const WIDE = /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꥠ-꥿가-힣豈-﫿︰-﹏＀-｠￠-￦]/
+// East Asian wide and fullwidth characters, and the emoji drawn as emoji by
+// default: two cells each, as the engine's Bun.stringWidth counts them.
+const WIDE =
+  /[\u{1100}-\u{115F}\u{231A}\u{231B}\u{2329}\u{232A}\u{23E9}-\u{23EC}\u{23F0}\u{23F3}\u{25FD}\u{25FE}\u{2614}\u{2615}\u{2648}-\u{2653}\u{267F}\u{2693}\u{26A1}\u{26AA}\u{26AB}\u{26BD}\u{26BE}\u{26C4}\u{26C5}\u{26CE}\u{26D4}\u{26EA}\u{26F2}\u{26F3}\u{26F5}\u{26FA}\u{26FD}\u{2705}\u{270A}\u{270B}\u{2728}\u{274C}\u{274E}\u{2753}-\u{2755}\u{2757}\u{2795}-\u{2797}\u{27B0}\u{27BF}\u{2B1B}\u{2B1C}\u{2B50}\u{2B55}\u{2E80}-\u{303E}\u{3041}-\u{33FF}\u{3400}-\u{4DBF}\u{4E00}-\u{A4CF}\u{A960}-\u{A97F}\u{AC00}-\u{D7A3}\u{F900}-\u{FAFF}\u{FE10}-\u{FE19}\u{FE30}-\u{FE6F}\u{FF00}-\u{FF60}\u{FFE0}-\u{FFE6}\u{16FE0}-\u{16FE4}\u{16FF0}\u{16FF1}\u{17000}-\u{18D08}\u{1AFF0}-\u{1B2FF}\u{1F004}\u{1F0CF}\u{1F18E}\u{1F191}-\u{1F19A}\u{1F200}-\u{1F320}\u{1F32D}-\u{1F335}\u{1F337}-\u{1F37C}\u{1F37E}-\u{1F393}\u{1F3A0}-\u{1F3CA}\u{1F3CF}-\u{1F3D3}\u{1F3E0}-\u{1F3F0}\u{1F3F4}\u{1F3F8}-\u{1F43E}\u{1F440}\u{1F442}-\u{1F4FC}\u{1F4FF}-\u{1F53D}\u{1F54B}-\u{1F54E}\u{1F550}-\u{1F567}\u{1F57A}\u{1F595}\u{1F596}\u{1F5A4}\u{1F5FB}-\u{1F64F}\u{1F680}-\u{1F6C5}\u{1F6CC}\u{1F6D0}-\u{1F6D2}\u{1F6D5}-\u{1F6D7}\u{1F6DC}-\u{1F6DF}\u{1F6EB}\u{1F6EC}\u{1F6F4}-\u{1F6FC}\u{1F7E0}-\u{1F7EB}\u{1F7F0}\u{1F90C}-\u{1F93A}\u{1F93C}-\u{1F945}\u{1F947}-\u{1F9FF}\u{1FA70}-\u{1FAFF}\u{20000}-\u{3FFFD}]/u
 
-/** Terminal cells a text takes: two for a wide (CJK, Hangul) character. */
+// What rides on the character before it and takes no cell of its own:
+// combining marks, joiners, variation selectors, a syllable's later jamo,
+// skin tones.
+const RIDER = /[\p{Mn}\p{Me}\p{Cf}\u{1160}-\u{11FF}\u{D7B0}-\u{D7FF}\u{1F3FB}-\u{1F3FF}]/u
+const SKIN_TONE = /[\u{1F3FB}-\u{1F3FF}]/u
+const PICTOGRAPH = /\p{Extended_Pictographic}/u
+const JOINER = '\u{200D}'
+const EMOJI_STYLE = '\u{FE0F}'
+const PRINTABLE_ASCII = /^[ -~]*$/
+
+/**
+ * The text cut where a terminal draws one character: a base, with the marks
+ * and selectors that ride on it and the emoji a zero-width joiner joins.
+ */
+export function clusters(text: string): string[] {
+  const out: string[] = []
+  let isJoined = false
+  for (const ch of text) {
+    // nothing below U+00AD rides, so plain text skips the patterns
+    const rides = (isJoined && PICTOGRAPH.test(ch)) || (ch >= '\u{AD}' && RIDER.test(ch))
+    if (out.length > 0 && rides) out[out.length - 1] += ch
+    else out.push(ch)
+    isJoined = ch === JOINER
+  }
+  return out
+}
+
+/** Cells one cluster takes: two when wide, or drawn as emoji (U+FE0F). */
+export function clusterWidth(cluster: string): number {
+  const code = cluster.codePointAt(0) ?? 32
+  if (cluster.length === 1) {
+    // the common cases first, with no pattern to run: Latin, then Hangul
+    if (code < 0x300 && code !== 0xad) return 1
+    if (code >= 0xac00 && code <= 0xd7a3) return 2
+  }
+  const base = String.fromCodePoint(code)
+  if (SKIN_TONE.test(base)) return 2 // a skin tone with nothing to ride on draws alone
+  if (RIDER.test(base)) return 0
+  return WIDE.test(base) || cluster.includes(EMOJI_STYLE) ? 2 : 1
+}
+
+/** Terminal cells a text takes: two for a wide (CJK, Hangul, emoji) character. */
 export function displayWidth(text: string): number {
+  if (PRINTABLE_ASCII.test(text)) return text.length
   let width = 0
-  for (const ch of text) width += WIDE.test(ch) ? 2 : 1
+  for (const cluster of clusters(text)) width += clusterWidth(cluster)
   return width
 }
 
