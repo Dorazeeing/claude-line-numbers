@@ -1,5 +1,4 @@
-import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderElement, TextProps } from 'claude-code'
+import type { EngineInterface, Register, RenderElement, SessionMessage, TextProps } from 'claude-code'
 
 import type { Starts } from '../types'
 import { findLineRefs, lastNumber, numberReply, rowsAtMost, splitUnits, textKey } from './lines'
@@ -8,70 +7,95 @@ import { layoutTable } from './table'
 import type { Span } from './table'
 
 type ApiBlock = { type: string; text?: unknown }
-type ApiMessage = { role: 'user' | 'assistant'; content: readonly ApiBlock[] }
 
-const starts = atom({ plugin: 'line-numbers', key: 'starts' } as const, { byText: {}, pending: 0 } as Starts)
+// Where each text block of a reply starts counting. Kept in the module, not
+// in $.state: a drawing that reads $.state waits on the host for it and is
+// drawn again on every write, which made the transcript slow to load and to
+// scroll. session.start fills it again after a reload.
+const numbering: Starts = { byText: {}, pending: 0 }
+
+// The start each later block of a reply was last drawn with, by its text's
+// key: a rebuild that moves one of them asks for a redraw.
+const drawnStarts = new Map<string, number>()
 
 const textsOf = (content: readonly ApiBlock[]) =>
   content.flatMap(b => (b.type === 'text' && typeof b.text === 'string' && b.text.trim() !== '' ? [b.text] : []))
 
+const REMINDER = /<system-reminder>[\s\S]*?<\/system-reminder>/g
+
 // A user message that opens a reply: the person's words, not a tool's
 // result or a reminder the engine slipped in between two model calls.
-const isPrompt = (content: readonly ApiBlock[]) =>
-  !content.some(b => b.type === 'tool_result') &&
-  textsOf(content).some(text => !text.trimStart().startsWith('<system-reminder>'))
+const isPrompt = (message: SessionMessage) =>
+  message.role === 'user' &&
+  (message.toolResults ?? []).length === 0 &&
+  message.text.replace(REMINDER, '').trim() !== ''
 
 // Every reply's text blocks, in order: the assistant messages between two of
 // the person's prompts (a user message that answers no tool call).
-function replies(messages: readonly ApiMessage[]): string[][] {
+function replies(messages: readonly SessionMessage[]): string[][] {
   const all: string[][] = [[]]
   for (const message of messages) {
     if (message.role === 'user') {
-      if (isPrompt(message.content) && all[all.length - 1]!.length > 0) all.push([])
-      continue
+      if (isPrompt(message) && all[all.length - 1]!.length > 0) all.push([])
+    } else if (message.text.trim() !== '') {
+      all[all.length - 1]!.push(message.text)
     }
-    all[all.length - 1]!.push(...textsOf(message.content))
   }
   return all.filter(blocks => blocks.length > 0)
 }
 
-async function apiMessages($: EngineInterface): Promise<readonly ApiMessage[]> {
-  const found = await $.session.messages({ as: 'api' })
-  return Array.isArray(found) ? (found as readonly ApiMessage[]) : []
+// The transcript's rows, not its API form: that one carries every tool
+// result whole, more than twice the bytes over the boundary.
+async function sessionMessages($: EngineInterface): Promise<readonly SessionMessage[]> {
+  const found = await $.session.messages()
+  return Array.isArray(found) ? found : []
 }
 
 async function rebuild($: EngineInterface): Promise<void> {
   const byText: Record<string, number> = {}
   let pending = 0
-  const messages = await apiMessages($)
+  const messages = await sessionMessages($)
   for (const blocks of replies(messages)) {
     const { starts: offsets } = numberReply(blocks)
     blocks.forEach((text, k) => (byText[textKey(text)] = offsets[k]!))
     pending = offsets.at(-1)! + lastNumber(splitUnits(blocks.at(-1)!))
   }
   const last = messages.at(-1)
-  if (last?.role === 'user' && isPrompt(last.content)) pending = 0
-  await update($, starts, () => ({ byText, pending }))
+  if (last !== undefined && isPrompt(last)) pending = 0
+  numbering.byText = byText
+  numbering.pending = pending
+  // A block drawn before the transcript was read counted from 0: redraw it.
+  if ([...drawnStarts].some(([key, start]) => (byText[key] ?? pending) !== start)) $.ui.invalidate('ui.render')
 }
 
 // The engine's reply bullet: ⏺ on macOS, ● elsewhere. A module has no
-// `process.platform`; a macOS home lives under /Users.
+// `process.platform`; a macOS home lives under /Users. The first replies are
+// drawn before the host answers, which it is slow to do while a session
+// loads, so they draw ⏺ and are drawn again only if the answer is ●.
+const GUESSED_GLYPH = '⏺'
 let bulletGlyph: string | undefined
-async function bulletOf($: EngineInterface): Promise<string> {
-  if (bulletGlyph === undefined) {
-    let home = ''
-    try {
-      home = (await $.env.get('HOME')) ?? ''
-    } catch {
-      // a host that answers no env reads draws the default
-    }
-    bulletGlyph = home.startsWith('/Users/') ? '⏺' : '●'
-  }
-  return bulletGlyph
+let isGlyphGuessed = false
+let bulletRead: Promise<void> | undefined
+function readBullet($: EngineInterface): void {
+  bulletRead ??= $.env.get('HOME').then(
+    home => {
+      bulletGlyph = (home ?? '').startsWith('/Users/') ? '⏺' : '●'
+      if (isGlyphGuessed && bulletGlyph !== GUESSED_GLYPH) $.ui.invalidate('ui.render')
+    },
+    () => {
+      bulletGlyph = '●' // a host that answers no env reads draws the default
+      if (isGlyphGuessed) $.ui.invalidate('ui.render')
+    },
+  )
 }
 
+// The trees last drawn, by everything a tree is drawn from: the scroll
+// reports which rows are on screen, and each report draws the reply again.
+const MAX_TREES = 200
+const trees = new Map<string, RenderElement>()
+
 async function describeRefs($: EngineInterface, refs: number[]): Promise<string | undefined> {
-  const reply = replies(await apiMessages($)).at(-1)
+  const reply = replies(await sessionMessages($)).at(-1)
   if (reply === undefined) return undefined
   const { lines } = numberReply(reply)
   const found = refs.flatMap(n => {
@@ -92,9 +116,12 @@ async function describeRefs($: EngineInterface, refs: number[]): Promise<string 
 export const register: Register = on => {
   let isMainScreenNoted = false
 
+  // The transcript is read in the background: nothing waits on it, and a
+  // block it renumbers is drawn again when it lands.
   on('session.start', async ($, e, next) => {
+    readBullet($)
     const result = await next(e)
-    await rebuild($)
+    void rebuild($).catch(() => undefined)
     return result
   })
 
@@ -105,19 +132,11 @@ export const register: Register = on => {
     const { message } = e
     if (e.agentId !== undefined) return result
     if (e.door === 'prompt' || e.door === 'command') {
-      await update($, starts, s => (s.pending === 0 ? s : { ...s, pending: 0 }))
+      numbering.pending = 0
     } else if (message.type === 'assistant') {
-      const texts = textsOf(message.content)
-      if (texts.length > 0) {
-        await update($, starts, s => {
-          const byText = { ...s.byText }
-          let pending = s.pending
-          for (const text of texts) {
-            byText[textKey(text)] = pending
-            pending += lastNumber(splitUnits(text))
-          }
-          return { byText, pending }
-        })
+      for (const text of textsOf(message.content)) {
+        numbering.byText[textKey(text)] = numbering.pending
+        numbering.pending += lastNumber(splitUnits(text))
       }
     }
     return result
@@ -136,54 +155,66 @@ export const register: Register = on => {
       return next(e)
     }
 
-    const units = splitUnits(e.props.text)
+    const { text, isFirstOfReply } = e.props
+    const key = textKey(text)
+    const offset = isFirstOfReply ? 0 : (numbering.byText[key] ?? numbering.pending)
+    if (!isFirstOfReply) drawnStarts.set(key, offset)
+    readBullet($)
+    if (bulletGlyph === undefined && isFirstOfReply) isGlyphGuessed = true
+    const glyph = bulletGlyph ?? GUESSED_GLYPH
+    const columns = e.viewport.columns
+
+    const treeKey = `${columns}:${offset}:${isFirstOfReply ? glyph : ''}:${key}`
+    const drawn = trees.get(treeKey)
+    if (drawn !== undefined) {
+      trees.delete(treeKey) // most recent last, so the oldest leaves first
+      trees.set(treeKey, drawn)
+      return drawn
+    }
+
+    const units = splitUnits(text)
     const count = lastNumber(units)
     if (count === 0) return next(e)
-
-    const known = await read($, starts)
-    const offset = e.props.isFirstOfReply ? 0 : (known.byText[textKey(e.props.text)] ?? known.pending)
-    const columns = e.viewport.columns
-    const glyph = await bulletOf($)
     const { Box, Code, Markdown, Text } = $.ui.resolve(e)
 
-    // "● " + the number + " │ ": the gutter, `width` cells in all.
-    const digits = String(offset + count).length
+    // "● " + the number + " │ ": the gutter, `width` cells in all. Two
+    // digits at least, so a block renumbered after it was drawn keeps its
+    // width and wraps as it did.
+    const digits = Math.max(2, String(offset + count).length)
     const width = digits + 5
-    let isBulletDue = e.props.isFirstOfReply
+    const room = columns - width
+    let isBulletDue = isFirstOfReply
+    let height = 0
 
-    // One row: the gutter beside `content`. The engine leaves a Code's line
-    // gutter, and every cell left of it, out of a fullscreen copy: this Code
-    // lies under the drawn gutter as that mask, clipped to the row. Its
-    // gutter, " " + digits + " ", numbers from 10^(width-2), so it is
-    // width+1 cells; a clip leaves its last cell out of the mask, so the
-    // clip is width+1 wide and the mask exactly `width`. The mask's numbers
-    // show wherever nothing is drawn over them, so the rule under the label
-    // runs as far as the mask does, and `rows` must be at least the row's
-    // height: a row taller than its mask shows those numbers as it scrolls.
-    const row = (n: number | undefined, rows: number, content: RenderElement | null) => {
-      const bullet = isBulletDue ? glyph : ' '
+    const label = (n: number | undefined) => `${n === undefined ? ' '.repeat(digits) : String(n).padStart(digits)} │ `
+
+    // One row: its number beside `content`, `rows` the most it can wrap to.
+    // Each element of a row costs every redraw, and a reply at the screen's
+    // edge is drawn again at each step of a scroll, so a row holds no more
+    // than its gutter and its content.
+    const row = (n: number, rows: number, content: RenderElement | null) => {
+      height += rows
+      const gutter = isBulletDue ? (
+        <Text>
+          <Text color="text">{glyph}</Text>
+          <Text dimColor>{` ${label(n)}`}</Text>
+        </Text>
+      ) : (
+        <Text dimColor>{`  ${label(n)}`}</Text>
+      )
       isBulletDue = false
-      const label = n === undefined ? ' '.repeat(digits) : String(n).padStart(digits)
       return (
         <Box flexDirection="row">
           <Box width={width} flexShrink={0}>
-            <Box position="absolute" top={0} bottom={0} left={0} width={width + 1} overflow="hidden">
-              <Code source={Array(rows + 1).fill(' ').join('\n')} startLine={10 ** (width - 2)} />
-            </Box>
-            <Text>
-              <Text color="text">{bullet}</Text> <Text dimColor>{label} │ </Text>
-            </Text>
-            {rows > 1 ? (
-              <Box position="absolute" top={1} bottom={0} left={0} width={width} overflow="hidden">
-                <Text dimColor>{Array(rows).fill(`${' '.repeat(width - 2)}│ `).join('\n')}</Text>
-              </Box>
-            ) : null}
+            {gutter}
           </Box>
-          <Box flexGrow={1} flexShrink={1}>
-            {content}
-          </Box>
+          {content}
         </Box>
       )
+    }
+    const blank = () => {
+      height += 1
+      return <Text dimColor>{`  ${label(undefined)}`}</Text>
     }
 
     // A run of a table cell, styled as the engine styles inline markdown.
@@ -199,11 +230,10 @@ export const register: Register = on => {
       return <Text {...style}>{text}</Text>
     }
 
-    const room = columns - width
     const rowsOf = (u: Unit): RenderElement[] => {
       switch (u.kind) {
         case 'blank':
-          return [row(undefined, 1, null)]
+          return [blank()]
         case 'code':
           return u.lines.map((line, k) =>
             row(
@@ -242,19 +272,41 @@ export const register: Register = on => {
             row(
               offset + u.n,
               rowsAtMost(u.text, room - u.indent),
-              <Box paddingLeft={u.indent}>
+              u.indent === 0 ? (
                 <Markdown text={u.text} />
-              </Box>,
+              ) : (
+                <Box paddingLeft={u.indent}>
+                  <Markdown text={u.text} />
+                </Box>
+              ),
             ),
           ]
       }
     }
+    const rows = units.flatMap(rowsOf)
 
-    return (
+    // The engine leaves a Code's line gutter, and every cell left of it, out
+    // of a fullscreen copy: one Code under the whole gutter column is that
+    // mask, clipped to the reply. Its gutter, " " + digits + " ", numbers
+    // from 10^(width-2), so it is width+1 cells; a clip leaves its last cell
+    // out, so the clip is width+1 wide and the mask exactly `width`. Its
+    // numbers show wherever nothing is drawn over them: the rule runs as far
+    // as the mask, both at least as tall as the reply (`height` errs high),
+    // and each row's number is drawn over the rule.
+    const tree = (
       <Box flexDirection="column" marginTop={1}>
-        {units.flatMap(rowsOf)}
+        <Box position="absolute" top={0} bottom={0} left={0} width={width + 1} overflow="hidden">
+          <Code source={Array(height + 1).fill(' ').join('\n')} startLine={10 ** (width - 2)} />
+        </Box>
+        <Box position="absolute" top={0} bottom={0} left={0} width={width} overflow="hidden">
+          <Text dimColor>{Array(height + 1).fill(`${' '.repeat(width - 2)}│ `).join('\n')}</Text>
+        </Box>
+        {rows}
       </Box>
     )
+    if (trees.size >= MAX_TREES) trees.delete(trees.keys().next().value!)
+    trees.set(treeKey, tree)
+    return tree
   })
 
   on('prompt.submit', async ($, e, next) => {

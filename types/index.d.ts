@@ -8,9 +8,3 @@ export type Starts = {
   /** Where the next block of the reply in progress starts. */
   pending: number
 }
-
-declare module 'claude-code' {
-  interface PluginState {
-    'line-numbers': { starts: Starts }
-  }
-}
