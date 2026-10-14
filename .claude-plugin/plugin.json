@@ -1,0 +1,8 @@
+{
+  "name": "line-numbers",
+  "version": "0.1.0",
+  "description": "Dim, unselectable line numbers beside Claude's replies, and 'line 14' references resolved for the model",
+  "author": { "name": "Dorazeeing" },
+  "homepage": "https://github.com/Dorazeeing/claude-line-numbers",
+  "types": "./types/index.d.ts"
+}

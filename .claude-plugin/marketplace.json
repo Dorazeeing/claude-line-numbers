@@ -1,0 +1,5 @@
+{
+  "name": "claude-line-numbers",
+  "owner": { "name": "Dorazeeing" },
+  "plugins": [{ "name": "line-numbers", "source": "./" }]
+}
