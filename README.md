@@ -3,6 +3,7 @@
 ![version](https://img.shields.io/badge/version-0.2.0-blue)
 ![Claude Code](https://img.shields.io/badge/Claude%20Code-2.1.299%2B-d97757)
 ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux%2FWSL-lightgrey)
+![license](https://img.shields.io/badge/license-MIT-green)
 
 **Claude Code 답변에 VS Code 같은 줄번호를 붙여주는 모드예요.**
 마우스로 드래그해서 복사해도 번호는 **절대 딸려오지 않고**, 번호를 클릭하면 그 줄을 질문에 바로 인용할 수 있어요.
@@ -141,6 +142,10 @@ claude plugin test .       # 테스트 실행
 
 로컬 폴더를 바로 써보려면 `claude --plugin-dir .`로 실행하세요. 고친 뒤에는 `/reload-plugins`로 다시 불러와요.
 
+## 라이선스
+
+[MIT](LICENSE). 자유롭게 쓰고, 고치고, 배포해도 돼요. 단, 저작권 표시와 라이선스 문구는 남겨주세요.
+
 ---
 
 <a id="english"></a>
@@ -158,3 +163,5 @@ claude plugin test .       # 테스트 실행
 **Install:** `/plugin install line-numbers --marketplace Dorazeeing/claude-line-numbers`
 
 **Requires:** Claude Code 2.1.299+ and the fullscreen renderer (`/tui fullscreen`; it is off by default inside tmux). Drag plainly: Shift-drag (Windows Terminal) and Option-drag (macOS) are the terminal's own selection, and those do copy the numbers.
+
+**License:** [MIT](LICENSE)
