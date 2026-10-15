@@ -61,6 +61,10 @@ describe('findLineRefs', () => {
     expect(findLineRefs('2번부터 4번 줄까지')).toEqual([2, 3, 4])
     expect(findLineRefs('3, 9번 줄')).toEqual([3, 9])
     expect(findLineRefs('12행은 왜 그래?')).toEqual([12])
+    expect(findLineRefs('31째 줄이 이해가 안 돼')).toEqual([31])
+    expect(findLineRefs('라인 31이 뭐야')).toEqual([31])
+    expect(findLineRefs('줄 3~5 다시')).toEqual([3, 4, 5])
+    expect(findLineRefs('31번 라인이 이해가 안돼')).toEqual([31])
   })
 
   test('English forms', async () => {
@@ -71,6 +75,11 @@ describe('findLineRefs', () => {
   test('no reference', async () => {
     expect(findLineRefs('리액트 훅이 뭐야? 2025년 기준으로')).toEqual([])
     expect(findLineRefs('URL 14개')).toEqual([])
+    expect(findLineRefs('라인 3개 더 넣어줘')).toEqual([])
+    expect(findLineRefs('31번 줄 2번째 단어')).toEqual([31])
+    // a quoted line carries its own text; only the question is read
+    expect(findLineRefs('> 3번 줄: Beta one\n이 줄이 무슨 뜻이야?')).toEqual([])
+    expect(findLineRefs('> 3번 줄: Beta one\n5번 줄이랑 비교해줘')).toEqual([5])
   })
 
   test('a huge range is capped', async () => {

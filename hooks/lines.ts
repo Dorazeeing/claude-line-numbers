@@ -189,7 +189,10 @@ export function rowsAtMost(text: string, columns: number): number {
 const MAX_REFS = 40
 const RANGE_SEP = /^(?:~|-|–|—|부터|에서|to|through)$/i
 const KO_REF =
-  /((?:\d{1,4}\s*(?:번째|번)?\s*(?:,|~|-|–|—|부터|에서|와|과|이랑|랑|하고|및|그리고)\s*)*\d{1,4})\s*(?:번째|번)?\s*(?:줄|라인|행)/g
+  /((?:\d{1,4}\s*(?:번째|번|째)?\s*(?:,|~|-|–|—|부터|에서|와|과|이랑|랑|하고|및|그리고)\s*)*\d{1,4})\s*(?:번째|번|째)?\s*(?:줄|라인|행)/g
+// "라인 31", "줄 3~5": the word first; not a count ("라인 3개", "줄 2가지"), and
+// not the word that ends a reference ("31번 줄 2번째 단어").
+const KO_PREFIX = /(?<!\d\s*(?:번째|번|째)?\s*)(?:라인|줄)\s*(\d{1,4}(?:\s*[~\-–—]\s*\d{1,4})?)(?!\d)(?!\s*(?:개|가지|명|초|분|시간|일|%))/g
 const EN_REF = /\blines?\s*((?:\d{1,4}\s*(?:,|-|–|~|and|&|to|through)\s*)*\d{1,4})\b/gi
 const SHORT_REF = /\bL(\d{1,4}(?:\s*[-–~]\s*L?\d{1,4})?)\b/g
 
@@ -216,12 +219,19 @@ function expand(group: string, into: Set<number>): void {
 
 /**
  * The line numbers a prompt points at: "14번 줄", "14~16번 줄", "3, 5번째 줄",
- * "14행", "line 14", "lines 3-5", "L14". Sorted, at most 40.
+ * "14째 줄", "14행", "라인 14", "line 14", "lines 3-5", "L14", outside quoted
+ * ("> ") lines. Sorted, at most 40.
  */
 export function findLineRefs(prompt: string): number[] {
+  // A quoted line ("> 31번 줄: ...", what a click on a number writes) carries
+  // the line itself, which may be an older reply's: it points at nothing.
+  const asked = prompt
+    .split('\n')
+    .filter(line => !line.trimStart().startsWith('>'))
+    .join('\n')
   const found = new Set<number>()
-  for (const pattern of [KO_REF, EN_REF, SHORT_REF]) {
-    for (const match of prompt.matchAll(pattern)) expand(match[1]!, found)
+  for (const pattern of [KO_REF, KO_PREFIX, EN_REF, SHORT_REF]) {
+    for (const match of asked.matchAll(pattern)) expand(match[1]!, found)
   }
   return [...found].filter(n => n > 0).sort((a, b) => a - b)
 }

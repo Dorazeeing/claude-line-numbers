@@ -12,11 +12,19 @@ type ApiBlock = { type: string; text?: unknown }
 // in $.state: a drawing that reads $.state waits on the host for it and is
 // drawn again on every write, which made the transcript slow to load and to
 // scroll. session.start fills it again after a reload.
-const numbering: Starts = { byText: {}, pending: 0 }
+const numbering: Starts = { byId: {}, byText: {}, pending: 0 }
 
-// The start each later block of a reply was last drawn with, by its text's
-// key: a rebuild that moves one of them asks for a redraw.
+// The start each block of a reply was last drawn with, by its text's key: a
+// rebuild that moves one of them asks for a redraw.
 const drawnStarts = new Map<string, number>()
+
+// What a click on a line's number puts in the prompt: the line, quoted, under
+// its number, so the question that follows says which line it is about.
+function quoteOf(n: number, text: string): string {
+  const lines = text.split('\n')
+  if (lines.length === 1) return `> ${n}번 줄: ${text}\n`
+  return `> ${n}번 줄:\n${lines.map(line => `> ${line}`).join('\n')}\n`
+}
 
 const textsOf = (content: readonly ApiBlock[]) =>
   content.flatMap(b => (b.type === 'text' && typeof b.text === 'string' && b.text.trim() !== '' ? [b.text] : []))
@@ -98,17 +106,26 @@ async function describeRefs($: EngineInterface, refs: number[]): Promise<string 
   const reply = replies(await sessionMessages($)).at(-1)
   if (reply === undefined) return undefined
   const { lines } = numberReply(reply)
+  const last = Math.max(0, ...lines.keys())
+  // With a few lines asked about, the lines around each come too, so a line
+  // that only reads as part of its neighbours is understood with them.
+  const isNear = refs.length <= 3
   const found = refs.flatMap(n => {
     const text = lines.get(n)
-    return text === undefined ? [] : [`- line ${n}: ${JSON.stringify(text)}`]
+    if (text === undefined) return [`- line ${n}: none; the reply's lines run from 1 to ${last}`]
+    const around = isNear ? [n - 1, n + 1].filter(k => lines.has(k) && !refs.includes(k)) : []
+    return [
+      `- line ${n}: ${JSON.stringify(text)}`,
+      ...around.map(k => `  (line ${k}, beside it: ${JSON.stringify(lines.get(k))})`),
+    ]
   })
-  if (found.length === 0) return undefined
 
   return [
     '[line-numbers mod] The user reads your replies with line numbers in a left gutter, numbered',
-    'from 1 in each reply; fence markers and blank lines get none, and a table is one line. That',
-    'differs from counting the raw markdown, so do not recount: the line numbers in their message',
-    'point at exactly these lines of your previous reply, as the gutter showed them:',
+    'from 1 in each reply and on across its tool calls; fence markers and blank lines get none, and',
+    'a table is one line. That differs from counting the raw markdown, so do not recount: the line',
+    'numbers in their message point at exactly these lines of your previous reply, as the gutter',
+    'showed them:',
     ...found,
   ].join('\n')
 }
@@ -134,7 +151,9 @@ export const register: Register = on => {
     if (e.door === 'prompt' || e.door === 'command') {
       numbering.pending = 0
     } else if (message.type === 'assistant') {
-      for (const text of textsOf(message.content)) {
+      const texts = textsOf(message.content)
+      if (texts.length > 0) numbering.byId[e.uuid] = numbering.pending
+      for (const text of texts) {
         numbering.byText[textKey(text)] = numbering.pending
         numbering.pending += lastNumber(splitUnits(text))
       }
@@ -155,10 +174,14 @@ export const register: Register = on => {
       return next(e)
     }
 
+    // Where this block starts in its reply. `isFirstOfReply` is no guide: the
+    // engine sets it on every block that draws a bullet, the first after each
+    // tool call too, while a reply counts on across its tool calls. A block
+    // not appended yet is the one streaming, next in the reply in progress.
     const { text, isFirstOfReply } = e.props
     const key = textKey(text)
-    const offset = isFirstOfReply ? 0 : (numbering.byText[key] ?? numbering.pending)
-    if (!isFirstOfReply) drawnStarts.set(key, offset)
+    const offset = numbering.byId[e.requestId] ?? numbering.byText[key] ?? numbering.pending
+    drawnStarts.set(key, offset)
     readBullet($)
     if (bulletGlyph === undefined && isFirstOfReply) isGlyphGuessed = true
     const glyph = bulletGlyph ?? GUESSED_GLYPH
@@ -175,7 +198,7 @@ export const register: Register = on => {
     const units = splitUnits(text)
     const count = lastNumber(units)
     if (count === 0) return next(e)
-    const { Box, Code, Markdown, Text } = $.ui.resolve(e)
+    const { Box, Button, Code, Markdown, Text } = $.ui.resolve(e)
 
     // "● " + the number + " │ ": the gutter, `width` cells in all. Two
     // digits at least, so a block renumbered after it was drawn keeps its
@@ -188,24 +211,26 @@ export const register: Register = on => {
 
     const label = (n: number | undefined) => `${n === undefined ? ' '.repeat(digits) : String(n).padStart(digits)} │ `
 
-    // One row: its number beside `content`, `rows` the most it can wrap to.
-    // Each element of a row costs every redraw, and a reply at the screen's
-    // edge is drawn again at each step of a scroll, so a row holds no more
-    // than its gutter and its content.
-    const row = (n: number, rows: number, content: RenderElement | null) => {
+    // One row: its number beside `content`, `rows` the most it can wrap to,
+    // `quote` the line a click on the number puts in the prompt. Each element
+    // of a row costs every redraw, and a reply at the screen's edge is drawn
+    // again at each step of a scroll, so a row holds no more than its gutter
+    // and its content. The number is a Button over the mask: the mask keeps
+    // it out of a copy, as it does any cell there.
+    const row = (n: number, rows: number, content: RenderElement | null, quote: string) => {
       height += rows
-      const gutter = isBulletDue ? (
-        <Text>
-          <Text color="text">{glyph}</Text>
-          <Text dimColor>{` ${label(n)}`}</Text>
-        </Text>
-      ) : (
-        <Text dimColor>{`  ${label(n)}`}</Text>
-      )
+      const press = () => $.prompt.fill({ text: quoteOf(n, quote), mode: 'insert' })
+      // A list, not a Fragment: a Fragment stacks its children as a column.
+      const gutter = isBulletDue
+        ? [
+            <Text color="text">{`${glyph} `}</Text>,
+            <Button key={`n${n}`} plain dimColor label={label(n)} onPress={press} />,
+          ]
+        : <Button key={`n${n}`} plain dimColor label={`  ${label(n)}`} onPress={press} />
       isBulletDue = false
       return (
         <Box flexDirection="row">
-          <Box width={width} flexShrink={0}>
+          <Box flexDirection="row" width={width} flexShrink={0}>
             {gutter}
           </Box>
           {content}
@@ -240,6 +265,7 @@ export const register: Register = on => {
               offset + u.n + k,
               rowsAtMost(line, room),
               line === '' ? null : <Code source={line} language={u.language === '' ? undefined : u.language} />,
+              line,
             ),
           )
         case 'table': {
@@ -253,7 +279,7 @@ export const register: Register = on => {
           const lines = layoutTable(u.text, room - 2)
           if (lines === undefined) {
             const textRows = u.text.split('\n').reduce((sum, line) => sum + rowsAtMost(line, room) + 1, 2)
-            return [row(offset + u.n, textRows, <Markdown text={u.text} />)]
+            return [row(offset + u.n, textRows, <Markdown text={u.text} />, u.text)]
           }
           return [
             row(
@@ -264,6 +290,7 @@ export const register: Register = on => {
                   <Text wrap="truncate-end">{line.length === 0 ? ' ' : line.map(spanOf)}</Text>
                 ))}
               </Box>,
+              u.text,
             ),
           ]
         }
@@ -279,6 +306,7 @@ export const register: Register = on => {
                   <Markdown text={u.text} />
                 </Box>
               ),
+              u.text,
             ),
           ]
       }

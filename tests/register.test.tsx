@@ -13,12 +13,16 @@ const message = (isFullscreen: boolean, isFirstOfReply = true, text = TEXT) =>
     props: { text, isFirstOfReply },
   }) as const
 
-// The first row of each numbered line's gutter, as drawn: whole gutters
-// only, not the dim part of the one that holds the bullet.
-const labels = async (ui: { findAll: (q: { type: string }) => Promise<{ text: string }[]> }) => {
-  const found = (await ui.findAll({ type: 'Text' })).map(t => t.text).filter(t => /^[●⏺ ] +\d+ │ $/.test(t))
-  const width = Math.max(0, ...found.map(t => t.length))
-  return found.filter(t => t.length === width)
+// The first row of each numbered line's gutter, as drawn: the bullet, where
+// the row has one, and the number's Button.
+type Found = { text: string; key: string | undefined; props: Record<string, unknown> }
+const labels = async (ui: { findAll: (q: { type: string }) => Promise<Found[]> }) => {
+  const bullet = (await ui.findAll({ type: 'Text' })).map(t => t.text).find(t => /^[●⏺] $/.test(t))
+  const numbers = (await ui.findAll({ type: 'Button' })).filter(b => /^n\d+$/.test(b.key ?? ''))
+  return numbers.map(b => {
+    const label = String(b.props.label)
+    return label.startsWith('  ') ? label : `${bullet ?? '?'}${label}`
+  })
 }
 
 // The reply's mask (a Code numbered from 10^(width-2)) and the rule over it.
@@ -83,14 +87,17 @@ test('elsewhere the bullet drawn before HOME is read is drawn again as the engin
   await ui.unmount()
 })
 
+type Appender = { session: { append: (input: never) => Promise<unknown> } }
+const appender = ($: Appender) => (door: 'prompt' | 'response', type: 'user' | 'assistant', text: string, uuid = `row-${text}`) =>
+  $.session.append({
+    door,
+    uuid,
+    origin: door === 'prompt' ? { kind: 'composer' } : { kind: 'model', model: 'test' },
+    message: { type, content: [{ type: 'text', text }] },
+  } as never)
+
 test('a later block of a reply carries the numbering on; a prompt starts it over', async $ => {
-  const append = (door: 'prompt' | 'response', type: 'user' | 'assistant', text: string) =>
-    $.session.append({
-      door,
-      uuid: `row-${text}`,
-      origin: door === 'prompt' ? { kind: 'composer' } : { kind: 'model', model: 'test' },
-      message: { type, content: [{ type: 'text', text }] },
-    })
+  const append = appender($)
 
   await append('prompt', 'user', '질문')
   await append('response', 'assistant', '가\n나\n다')
@@ -108,6 +115,46 @@ test('a later block of a reply carries the numbering on; a prompt starts it over
   await append('prompt', 'user', '다음 질문')
   ui = await $.ui.mount(message(true, false, '새 답의\n둘째 블록'))
   expect(await labels(ui)).toEqual(['   1 │ ', '   2 │ '])
+  await ui.unmount()
+})
+
+test('the first block after a tool call draws its bullet and counts on, as the lookup does', async $ => {
+  const append = appender($)
+  await append('prompt', 'user', '질문')
+  await append('response', 'assistant', '확인할게요.\n잠시만요.\n끝')
+  // the engine sets isFirstOfReply on this block too: it opens a bullet after the call
+  const ui = await $.ui.mount(message(true, true))
+  expect(await labels(ui)).toEqual(['●  4 │ ', '   5 │ ', '   6 │ '])
+  await ui.unmount()
+})
+
+test('a block is found by its row id before its text', async $ => {
+  const append = appender($)
+  await append('prompt', 'user', '질문')
+  await append('response', 'assistant', '가\n나', 'row-1')
+  await append('response', 'assistant', '다\n라', 'row-2')
+  // the drawn text is not the stored one (the engine hides parts of a reply)
+  const ui = await $.ui.mount({ ...message(true, false, '다'), requestId: 'row-2' })
+  expect(await labels(ui)).toEqual(['   3 │ '])
+  await ui.unmount()
+})
+
+test('a click on a number puts that line, quoted, in the prompt', async ($, on) => {
+  const filled: string[] = []
+  on('prompt.fill', ($, e) => {
+    filled.push(`${e.mode}:${e.text}`)
+    return { isFilled: true }
+  })
+  const table = '| a | b |\n|---|---|\n| 1 | 2 |'
+  const ui = await $.ui.mount(message(true, true, `${TEXT}\n${table}`))
+  await ui.press({ key: 'n1' })
+  await ui.press({ key: 'n2' })
+  await ui.press({ key: 'n4' })
+  expect(filled).toEqual([
+    'insert:> 1번 줄: 첫 줄\n',
+    'insert:> 2번 줄: let x = 1\n',
+    `insert:> 4번 줄:\n${table.split('\n').map(l => `> ${l}`).join('\n')}\n`,
+  ])
   await ui.unmount()
 })
 
@@ -162,6 +209,16 @@ test('a line reference reaches the model as context, numbered across the reply',
   await submit('1~2번 줄은?')
   expect(context?.[0]).toContain('- line 1: "확인할게요."')
   expect(context?.[0]).toContain('- line 2: "하나"')
+
+  // a line past the reply is said to be, so the model does not guess at one
+  await submit('9번 줄은?')
+  expect(context?.[0]).toContain("- line 9: none; the reply's lines run from 1 to 4")
+
+  // with a few lines asked about, their neighbours come along
+  await submit('라인 3 설명해줘')
+  expect(context?.[0]).toContain('- line 3: "둘"')
+  expect(context?.[0]).toContain('(line 2, beside it: "하나")')
+  expect(context?.[0]).toContain('(line 4, beside it: "print(3)")')
 
   context = undefined
   await submit('그냥 질문')
