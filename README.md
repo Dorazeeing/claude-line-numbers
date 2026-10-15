@@ -8,7 +8,7 @@
 **Claude Code 답변에 VS Code 같은 줄번호를 붙여주는 모드예요.**
 마우스로 드래그해서 복사해도 번호는 **절대 딸려오지 않고**, 번호를 클릭하면 그 줄을 질문에 바로 인용할 수 있어요.
 
-> A Claude Code mod that adds a VS Code-style line-number gutter to Claude's replies. The numbers never end up in a mouse copy, and clicking one quotes that line into your prompt. [English summary ↓](#english)
+> A Claude Code mod that adds a VS Code-style line-number gutter to Claude's replies. The numbers never end up in a mouse copy, and clicking one quotes that line into your prompt. [English ↓](#english)
 
 ```
 ❯ useEffect가 왜 두 번 실행돼?
@@ -124,7 +124,7 @@ claude plugin uninstall line-numbers@claude-line-numbers
 <details>
 <summary><b>동작 방식</b></summary>
 
-- **복사에서 빠지는 이유.** Claude Code의 전체화면 선택 기능은 엔진이 그리는 코드 블록의 줄번호 거터와, 그 왼쪽 영역을 복사에서 빼요. 이 모드는 답변의 거터 열 아래에 그 거터를 잘라서 **마스크**로 깔고, 그 위에 `● 5 │`을 그려요. 그래서 보이는 거터 전체가 복사에서 빠져요. 번호는 마스크 위에 놓인 버튼이라, 복사에서는 빠지면서도 클릭은 돼요.
+- **복사에서 빠지는 이유.** Claude Code의 전체화면 선택 기능은 엔진이 그리는 코드 블록의 줄번호 거터와, 그 왼쪽 영역을 복사에서 빼요. 이 모드는 답변 전체 아래에 그 거터를 잘라 만든 **마스크**를 깔고, 그 위에 `● 5 │`을 그려요. 그래서 보이는 거터 전체가 복사에서 빠져요. 번호는 마스크 위에 놓인 버튼이라, 복사에서는 빠지면서도 클릭은 돼요.
 - **번호가 정확한 이유.** 답변은 원문 한 줄당 한 행으로 그려요. 그리고 대화에 행이 추가될 때마다(`session.append`), 각 텍스트 블록이 답변 안에서 몇 번째 줄부터 시작하는지 기억해요. 화면에 그릴 때도, "N번 줄"을 찾을 때도 같은 번호를 써요.
 - **표가 깨지지 않는 이유.** Claude Code는 표를 터미널 전체 폭에 맞춰 그려요. 거터가 그만큼 폭을 차지하니, 그대로 두면 표가 넘쳐서 접혀요. 그래서 모드는 표만 남은 폭에 맞춰, Claude Code와 같은 규칙으로 다시 그려요.
 
@@ -151,15 +151,140 @@ claude plugin test .       # 테스트 실행
 
 ## English
 
-**claude-line-numbers** adds a dim, VS Code-style line-number gutter to Claude Code replies.
+[한국어 ↑](#claude-line-numbers)
 
-- **Numbered per reply.** Each reply starts at 1 and keeps counting across tool calls.
-- **Never copied.** A mouse drag copies the reply text only. The gutter sits on a mask that Claude Code's fullscreen selection leaves out.
-- **Click to quote.** Clicking a number puts `> 5번 줄: <line>` into your prompt.
-- **Ask by number.** Write "line 5", "lines 4-7", "5번 줄" or "라인 5", and the mod hands Claude the exact text of that line of its previous reply, with its neighbours.
+**A Claude Code mod that adds VS Code-style line numbers to Claude's replies.**
+Numbers are **never copied** when you copy with a mouse drag, and clicking a number quotes that line straight into your question.
 
-**Install:** `/plugin install line-numbers --marketplace Dorazeeing/claude-line-numbers`
+```
+❯ Why does useEffect run twice?
 
-**Requires:** Claude Code 2.1.299+ and the fullscreen renderer (`/tui fullscreen`; it is off by default inside tmux). Drag plainly: Shift-drag (Windows Terminal) and Option-drag (macOS) are the terminal's own selection, and those do copy the numbers.
+●  1 │ Let me check.
+  Read 1 file
+●  2 │ The cause is React's StrictMode.
+     │
+   3 │ In development, it mounts each component one extra time on purpose
+     │ to check that you didn't forget the cleanup function.
+   4 │ useEffect(() => {
+   5 │   const id = setInterval(tick, 1000)
+   6 │   return () => clearInterval(id)
+   7 │ }, [])
+```
 
-**License:** [MIT](LICENSE)
+### Why I made this
+
+When part of Claude's answer doesn't make sense, it's hard to tell Claude **where**.
+With this mod you can say "**line 5** doesn't make sense", or click the number to quote that line as is.
+Claude then knows **exactly** which line you mean.
+
+### Features
+
+| Feature | Description |
+| --- | --- |
+| 🔢 **Line numbers** | Each answer starts at 1. If tool calls come in between, the numbers keep counting within that answer. |
+| ✂️ **Left out of copies** | Dragging copies only the text to the right of `│`. The number, the `│`, the bullet and the indentation are left out, and a long line that wraps on screen is copied as one line. |
+| 🖱️ **Click to quote** | Clicking a number puts `> 5번 줄: …` (Korean for "line 5") into the prompt. Just write your question below it. Lines from older answers can be quoted too. |
+| 💬 **"Line N" questions** | Write "line 5", "lines 5-7", "L5" (or the Korean "5번 줄", "라인 5"), and the mod passes Claude the original text of those lines from the previous answer, together with the lines around them. |
+| 🍎 **OS-matched look** | Answer bullets are drawn exactly as Claude Code draws them: `⏺` on macOS, `●` everywhere else. |
+
+### Install
+
+In the Claude Code prompt:
+
+```
+/plugin install line-numbers --marketplace Dorazeeing/claude-line-numbers
+```
+
+Press `y` at `Add marketplace?` and pick **user** scope. It takes effect right away, from the current session.
+
+<details>
+<summary>Install, update and uninstall from the shell</summary>
+
+```sh
+# Install
+claude plugin install line-numbers --marketplace Dorazeeing/claude-line-numbers
+
+# Update (then run /reload-plugins in Claude Code)
+claude plugin update line-numbers@claude-line-numbers
+
+# Uninstall
+claude plugin uninstall line-numbers@claude-line-numbers
+```
+
+</details>
+
+#### Requirements
+
+- **Claude Code 2.1.299 or later.** On an older version the mod won't load. Run `claude update` first.
+- **Fullscreen mode.** This is Claude Code's default, but it is off inside tmux. If you don't see line numbers, run `/tui fullscreen`.
+- Works on macOS, Windows (PowerShell and cmd; Windows Terminal recommended) and Linux/WSL.
+
+### Usage
+
+**1. Click to ask (recommended)**
+
+Click the number of the line you're curious about, then write your question below it.
+
+```
+❯ > 5번 줄:   const id = setInterval(tick, 1000)
+  Where is this id used?
+```
+
+**2. Ask by number**
+
+```
+❯ I don't understand line 5
+❯ Explain lines 4-7 again
+❯ Compare line 3 and line 6
+```
+
+**3. Copying**
+
+Just drag as usual, and only the text goes to the clipboard.
+
+### Good to know
+
+- **Just drag.** **Shift+drag** in Windows Terminal and **Option+drag** in macOS Terminal and iTerm2 are the terminal selecting on its own, not Claude Code, so the numbers get copied too.
+- When you ask by number (method 2), the mod looks in the **previous answer**. For a line from an older answer, click its number to quote it.
+- Blank lines and the ```` ``` ```` lines of code blocks have no number. A table gets one number as a whole.
+- A terminal can't change the font size, so instead of making the numbers small, they are shown in gray.
+
+<details>
+<summary><b>Troubleshooting</b></summary>
+
+**I don't see line numbers**
+- Check that `claude --version` is 2.1.299 or later.
+- Check that you are in fullscreen mode (`/tui fullscreen`). In normal mode the mod deliberately draws no numbers and shows a notice once.
+- If you just installed it, run `/reload-plugins`. Answers already on screen may keep their old look; new answers get the numbers.
+
+**The numbers get copied**
+- Check that you didn't use Shift+drag or Option+drag.
+
+**On Windows, I use both WSL and the Windows build of Claude Code**
+- They have separate config folders, so install the mod in each.
+
+</details>
+
+<details>
+<summary><b>How it works</b></summary>
+
+- **Why the numbers are left out of copies.** Claude Code's fullscreen selection leaves out the line-number gutter of the code blocks the engine draws, and everything to its left. The mod lays a **mask** under the whole answer, made by clipping such a gutter, and draws `● 5 │` over it. So the whole visible gutter is left out of copies. Each number is a button sitting on the mask, so it is left out of copies and is still clickable.
+- **Why the numbers are accurate.** Answers are drawn one row per line of the original text. Each time a row is added to the conversation (`session.append`), the mod remembers which line of the answer each text block starts at. The same numbers are used when drawing the screen and when looking up "line N".
+- **Why tables don't break.** Claude Code draws a table to fit the full width of the terminal. The gutter takes up part of that width, so left as is the table would overflow and wrap. So the mod redraws only the tables, fitted to the remaining width, by the same rules as Claude Code.
+
+</details>
+
+### Development
+
+```sh
+git clone https://github.com/Dorazeeing/claude-line-numbers.git
+cd claude-line-numbers
+claude plugin validate .   # check the manifest and hooks
+claude plugin test .       # run the tests
+```
+
+To try the local folder directly, run `claude --plugin-dir .`. After editing, reload with `/reload-plugins`.
+
+### License
+
+[MIT](LICENSE). You are free to use, modify and distribute it. Just keep the copyright notice and the license text.
