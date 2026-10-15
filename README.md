@@ -41,7 +41,6 @@ Claude의 답변을 읽다가 이해 안 되는 부분이 생기면, 그 **위�
 | ✂️ **복사에서 제외** | 드래그하면 `│` 오른쪽 본문만 복사돼요. 번호, `│`, 불릿, 들여쓰기 공백은 빠지고, 화면에서 접힌 긴 줄은 한 줄로 복사돼요. |
 | 🖱️ **클릭해서 인용** | 번호를 클릭하면 프롬프트에 `> 5번 줄: …`이 들어가요. 그 아래에 질문만 쓰면 돼요. 예전 답변의 줄도 인용할 수 있어요. |
 | 💬 **"N번 줄" 질문** | "5번 줄", "5~7번 줄", "라인 5", "line 5"처럼 쓰면, 모드가 직전 답변의 그 줄 원문과 앞뒤 줄을 Claude에게 같이 전달해요. |
-| 📊 **표 맞춤** | 표를 줄번호 옆 남은 폭에 맞춰 다시 그려요. 폭이 좁으면 Claude Code처럼 `머리글: 값` 형태로 세로로 풀어요. |
 | 🍎 **OS별 모양 유지** | 답변 불릿을 Claude Code와 똑같이 그려요. macOS에서는 `⏺`, 그 밖에서는 `●`이에요. |
 
 ## 설치
@@ -127,7 +126,7 @@ claude plugin uninstall line-numbers@claude-line-numbers
 
 - **복사에서 빠지는 이유.** Claude Code의 전체화면 선택 기능은 엔진이 그리는 코드 블록의 줄번호 거터와, 그 왼쪽 영역을 복사에서 빼요. 이 모드는 답변의 거터 열 아래에 그 거터를 잘라서 **마스크**로 깔고, 그 위에 `● 5 │`을 그려요. 그래서 보이는 거터 전체가 복사에서 빠져요. 번호는 마스크 위에 놓인 버튼이라, 복사에서는 빠지면서도 클릭은 돼요.
 - **번호가 정확한 이유.** 답변은 원문 한 줄당 한 행으로 그려요. 그리고 대화에 행이 추가될 때마다(`session.append`), 각 텍스트 블록이 답변 안에서 몇 번째 줄부터 시작하는지 기억해요. 화면에 그릴 때도, "N번 줄"을 찾을 때도 같은 번호를 써요.
-- **표를 직접 그리는 이유.** Claude Code는 표를 터미널 전체 폭에 맞춰 그려요. 그래서 거터 옆에 두면 표가 넘쳐서 접혀요. 모드는 표를 남은 폭에 맞춰 Claude Code와 같은 규칙으로 다시 그려요.
+- **표가 깨지지 않는 이유.** Claude Code는 표를 터미널 전체 폭에 맞춰 그려요. 거터가 그만큼 폭을 차지하니, 그대로 두면 표가 넘쳐서 접혀요. 그래서 모드는 표만 남은 폭에 맞춰, Claude Code와 같은 규칙으로 다시 그려요.
 
 </details>
 
@@ -158,7 +157,6 @@ claude plugin test .       # 테스트 실행
 - **Never copied.** A mouse drag copies the reply text only. The gutter sits on a mask that Claude Code's fullscreen selection leaves out.
 - **Click to quote.** Clicking a number puts `> 5번 줄: <line>` into your prompt.
 - **Ask by number.** Write "line 5", "lines 4-7", "5번 줄" or "라인 5", and the mod hands Claude the exact text of that line of its previous reply, with its neighbours.
-- **Tables fit.** Tables are re-laid out to fit beside the gutter.
 
 **Install:** `/plugin install line-numbers --marketplace Dorazeeing/claude-line-numbers`
 
